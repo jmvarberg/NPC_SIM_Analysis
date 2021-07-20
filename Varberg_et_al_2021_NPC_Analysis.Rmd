@@ -1,0 +1,196 @@
+---
+title: "3D-SIM NPC Analysis"
+author: "JM Varberg"
+date: "7/20/2021"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This notebook outlines the analysis methods used to assess NPC density and distribution from 3D-SIM images. The following packages are required for this analysis:
+
+```{r echo=TRUE, message=FALSE, error=FALSE}
+library(rgl)
+library(bio3d)
+library(geometry)
+library(tidyverse)
+library(ggplot2)
+library(cowplot)
+library(summarytools)
+library(data.table)
+```
+
+## Visualizing NPCs extracted from images using ImageJ/FIJI
+
+The upstream analysis performed in ImageJ/FIJI generates CSV files containint the x/y/z coordinates of the NPC foci extracted in the 3D-SIM image. To visualize this data in 3D, we first read in the CSV and convert the data from pixel space to micron space, using the X/Y pixel size of 40 nm for the 3D-SIM images, and the z-slice step size of 125 nm. 
+
+```{r}
+nuc <- fread("./data/Cdc25_22_Nup37-mCherry_Asynchronous_good_02_visit_1_SIR_nuc0.xls", select = c("x", "y", "z"))
+
+nuc <- nuc %>% 
+  mutate(x=x*0.040,
+         y=y*0.040,
+         z=z*0.125)
+
+plot3d(nuc$x, nuc$y, nuc$z, col="blue", box=FALSE, type="p", size=5, aspect = "iso", axes = FALSE)
+rglwidget()
+```
+
+To visualize an approximation of the nuclear envelope surface, we can compute the 3D convex hull using the `convhulln` function from the `geometry` package. We can then wrap this into a function to plot the NPC data with the surface displayed.
+
+```{r echo=TRUE}
+## convexhull of points and visualization
+NPC.plot <- function(sim, alpha = 0.4, main=NULL, ...) {
+    sim <- as.data.frame(sim)
+    x <- sim$x
+    y <- sim$y
+    z <- sim$z
+    plot3d(x, y, z, col="blue", box = FALSE,
+           type ="p", size = 5, aspect = "iso", axes = FALSE, main=main)
+    ts.surf1 <- t(convhulln(sim))  # see the qhull documentations for the options
+    convex1 <-  rgl.triangles(sim[ts.surf1,1],sim[ts.surf1,2],sim[ts.surf1,3],col="gold2",alpha= alpha)
+}
+
+NPC.plot(nuc)
+rglwidget()
+```
+
+### Convex hull optimization
+
+We can see from this example that there are a few points that localize away from the predicted surface, potentially due to background signal or noise in the 3D-SIM images. We can also see that the outliers are distorting the convex hull surface from what we can visually determine should be the nuclear envelope surface. This will cause deviation in the computed surface area and volume, which will affect downstream calculation of the NPC density value.
+
+To remove these outlier points, we use a filtering approach whereby the distance between each point and the centroid of the point cloud is calculated, and the furthest point is removed. We then compare the fraction of points that lie on the convex hull surface before and after the point is removed. If the fraction increases, then the point is removed. This is allowed to be repeated until a maximum of ten percent of the points from the original point cloud have been removed. Let's look at how this works in this example nucleus. First, we see how many points are on the surface, and compute and visualize the centroid (in red).
+
+```{r}
+##calculate fraction of points on convex hull surface in original dataset
+nuchull <- convhulln(nuc) #output is a matrix with the numbers of the points that comprise the vertices of each trinangle of the convex hull surface
+ptsnuc <- unique(c(nuchull)) #extracts unique values from convhulln matrix
+print(paste("Fraction of points on hull surface, unfiltered data: ", round(length(ptsnuc)/nrow(nuc), digits=3)))
+
+##get centroid coordinates
+centroid <- nuc %>% 
+  summarise_all(mean)
+
+##plot data set with centroid showing
+NPC.plot(nuc, alpha=0.1)
+points3d(centroid, col="red", alpha=1, size=8)
+rglwidget()
+
+
+```
+
+Now we make a filtering algorithm to remove outliers if they improve the fraction of points on the convex hull surface.
+
+```{r}
+
+##define the function hullopt for hull optimization
+hullopt <- function(data) {
+    input <- data
+    centroid <- data %>% 
+      summarise_all(mean)
+    #print(centroid)
+    input$dist2cent <- as.numeric(dist.xyz(as.matrix(input), as.matrix(centroid))) #dist.xyz has to have matrices as input
+    input <- input %>% arrange(desc(dist2cent))
+    rows <- nrow(input)
+    loop <- 1
+    
+    while (0.1*rows > loop) {
+        i <- loop+1
+        current <- input[loop:rows, ]
+        currenthull <- convhulln(current[,1:3])
+        currentrows <- nrow(current)
+        currentpct <- length(unique(c(currenthull)))/currentrows
+        test <- input[i:rows, ]
+        testhull <- convhulln(test[,1:3])
+        testrows <- nrow(test)
+        testpct <- length(unique(c(testhull)))/testrows
+        loop <- loop + 1
+        if(testpct < currentpct) {
+            loop <- loop-1
+            break
+        }
+    }
+    
+    output <- input[loop:rows, 1:3]
+    optinfo <- loop-1
+    return(list("info" = optinfo, "output" = output))
+    
+}
+
+## try the optimization and visualize output. The hullopt function output is a list, with the first object containing info on how many points were removed, and the second object being the filtered x/y/z coordinate dataset.
+rgl.close()
+nucopt <- hullopt(nuc)
+print(paste("Number of points removed: ", nucopt$info))
+mfrow3d(nr=1, nc=2, sharedMouse=TRUE)
+NPC.plot(nuc, main="Unfiltered Points")
+NPC.plot(nucopt$output, main="Filtered Points")
+rglwidget()
+
+
+```
+
+### Extracting nuclear size/shape measurements
+
+The computation of the convex hull gives us a surface that is a rough estimation of the nuclear envelope. From the convex hull we can extract surface area and volume measurements. These can then be used to compute the spericity of the nucleus as well as a value for NPC density, or number of NPCs per unit surface area.
+
+```{r}
+#Function to calcualte an object's sphericity from user-defined volume and surface area values
+sphericity <- function(volume, area) {
+  (pi^(1/3) * (6*volume)^(2/3))/area
+}
+
+##Custom function to extract surface area from 3D convexhull with error handling. 
+surf.area <- function(x, cond="problem") {
+  out <- tryCatch(
+    {
+      convhulln(x, options="FA")$area
+    }, error = function(cond) {
+      message("Error with convex hull computation")
+      return(NA)
+    }, warning = function(cond) {
+      message("Warning during convex hull computation")
+      return(NA)
+    }
+  )
+  return(out)
+}
+
+##Custom function to extract volume from 3D convexhull with error handling. 
+volume <- function(x, cond="problem") {
+  out <- tryCatch(
+    {
+      convhulln(x, options="FA")$vol
+    }, error = function(cond) {
+      message("Error with convex hull computation")
+      return(NA)
+    }, warning = function(cond) {
+      message("Warning during convex hull computation")
+      return(NA)
+    }
+  )
+  return(out)
+}
+
+#Function to calculate surface area, volume, sphericity and number of NPCs for dataframe of x/y/z NPC coordinates.
+NPC.stats <-function(x) {
+  num.NPCs <- nrow(x)
+  SA <- surf.area(x)
+  VOL <- volume(x)
+  sphericity.x <- sphericity(VOL, SA)
+  density <- num.NPCs/SA
+  data.frame(SA, VOL, sphericity.x, num.NPCs, density)
+}
+
+nucstats <- round(NPC.stats(nucopt$output), digits=2)
+colnames(nucstats) <- c("Surface_Area", "Volume", "Sphericity", "Number_NPCs", "NPC_Density")
+knitr::kable(nucstats)
+
+```
+
+
