@@ -1,7 +1,7 @@
 ---
 title: "3D-SIM NPC Analysis"
 author: "JM Varberg"
-date: "7/20/2021"
+date: "3/29/2022"
 output: 
   html_document:
     code_folding: hide
@@ -193,6 +193,11 @@ colnames(nucstats) <- c("Surface_Area", "Volume", "Sphericity", "Number_NPCs", "
 knitr::kable(nucstats)
 
 ```
+
+
+This outlines the approach used to analyze 3D-SIM data throughout the manuscript. This approach is applied to full data sets by running the R script `NPC_analysis_v2.R` which can be found in this GitHub repo, as well as at the Stowers Original Data Repository page for this [manuscript](http://www.stowers.org/research/publications/libpb-1640). 
+
+
 
 ```{r}
 sessionInfo()
