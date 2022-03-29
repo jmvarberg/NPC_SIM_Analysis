@@ -24,11 +24,12 @@ library(ggplot2)
 library(cowplot)
 library(summarytools)
 library(data.table)
+
 ```
 
 ## Visualizing NPCs extracted from images using ImageJ/FIJI
 
-The upstream analysis performed in ImageJ/FIJI generates CSV files containint the x/y/z coordinates of the NPC foci extracted in the 3D-SIM image. To visualize this data in 3D, we first read in the CSV and convert the data from pixel space to micron space, using the X/Y pixel size of 40 nm for the 3D-SIM images, and the z-slice step size of 125 nm. 
+The upstream analysis performed in ImageJ/FIJI generates CSV files containing the x/y/z coordinates of the NPC foci extracted in the 3D-SIM image. To visualize this data in 3D, we first read in the CSV and convert the data from pixel space to micron space, using the X/Y pixel size of 40 nm for the 3D-SIM images, and the z-slice step size of 125 nm. 
 
 ```{r}
 nuc <- fread("./data/Cdc25_22_Nup37-mCherry_Asynchronous_good_02_visit_1_SIR_nuc0.xls", select = c("x", "y", "z"))
@@ -191,5 +192,9 @@ nucstats <- round(NPC.stats(nucopt$output), digits=2)
 colnames(nucstats) <- c("Surface_Area", "Volume", "Sphericity", "Number_NPCs", "NPC_Density")
 knitr::kable(nucstats)
 
+```
+
+```{r}
+sessionInfo()
 ```
 
